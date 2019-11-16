@@ -3,23 +3,59 @@
 " Last Modified: May 27, 2014
 " For bugs, patches and license go to https://github.com/rust-lang/rust.vim
 
-" Jump {{{1
-
-function! rust#Load() 
+function! rust#Load()
     " Utility call to get this script loaded, for debugging
 endfunction
 
 function! rust#GetConfigVar(name, default)
     " Local buffer variable with same name takes predeence over global
-    if has_key(b:, a:name) 
+    if has_key(b:, a:name)
         return get(b:, a:name)
     endif
-    if has_key(g:, a:name) 
+    if has_key(g:, a:name)
         return get(g:, a:name)
     endif
     return a:default
 endfunction
 
+" Include expression {{{1
+
+function! rust#IncludeExpr(fname) abort
+    " Remove leading 'crate::' to deal with 2018 edition style 'use'
+    " statements
+    let l:fname = substitute(a:fname, '^crate::', '', '')
+
+    " Remove trailing colons arising from lines like
+    "
+    "     use foo::{Bar, Baz};
+    let l:fname = substitute(l:fname, ':\+$', '', '')
+
+    " Replace '::' with '/'
+    let l:fname = substitute(l:fname, '::', '/', 'g')
+
+    " When we have
+    "
+    "    use foo::bar::baz;
+    "
+    " we can't tell whether baz is a module or a function; and we can't tell
+    " which modules correspond to files.
+    "
+    " So we work our way up, trying
+    "
+    "     foo/bar/baz.rs
+    "     foo/bar.rs
+    "     foo.rs
+    while l:fname !=# '.'
+        let l:path = findfile(l:fname)
+        if !empty(l:path)
+            return l:fname
+        endif
+        let l:fname = fnamemodify(l:fname, ':h')
+    endwhile
+    return l:fname
+endfunction
+
+" Jump {{{1
 
 function! rust#Jump(mode, function) range
     let cnt = v:count1
@@ -360,10 +396,19 @@ function! s:RmDir(path)
         echoerr 'Attempted to delete empty path'
         return 0
     elseif a:path ==# '/' || a:path ==# $HOME
-        echoerr 'Attempted to delete protected path: ' . a:path
+        let l:path = expand(a:path)
+        if l:path ==# '/' || l:path ==# $HOME
+            echoerr 'Attempted to delete protected path: ' . a:path
+            return 0
+        endif
+    endif
+
+    if !isdirectory(a:path)
         return 0
     endif
-    return system("rm -rf " . shellescape(a:path))
+
+    " delete() returns 0 when removing file successfully
+    return delete(a:path, 'rf') == 0
 endfunction
 
 " Executes {cmd} with the cwd set to {pwd}, without changing Vim's cwd.
@@ -412,22 +457,99 @@ function! rust#Play(count, line1, line2, ...) abort
         call setreg('"', save_regcont, save_regtype)
     endif
 
-    let body = l:rust_playpen_url."?code=".webapi#http#encodeURI(content)
+    let url = l:rust_playpen_url."?code=".webapi#http#encodeURI(content)
 
-    if strlen(body) > 5000
-        echohl ErrorMsg | echomsg 'Buffer too large, max 5000 encoded characters ('.strlen(body).')' | echohl None
+    if strlen(url) > 5000
+        echohl ErrorMsg | echomsg 'Buffer too large, max 5000 encoded characters ('.strlen(url).')' | echohl None
         return
     endif
 
-    let payload = "format=simple&url=".webapi#http#encodeURI(body)
+    let payload = "format=simple&url=".webapi#http#encodeURI(url)
     let res = webapi#http#post(l:rust_shortener_url.'create.php', payload, {})
-    let url = res.content
-
-    if exists('g:rust_clip_command')
-        call system(g:rust_clip_command, url)
+    if res.status[0] ==# '2'
+        let url = res.content
     endif
 
-    redraw | echomsg 'Done: '.url
+    let footer = ''
+    if exists('g:rust_clip_command')
+        call system(g:rust_clip_command, url)
+        if !v:shell_error
+            let footer = ' (copied to clipboard)'
+        endif
+    endif
+    redraw | echomsg 'Done: '.url.footer
+endfunction
+
+" Run a test under the cursor or all tests {{{1
+
+" Finds a test function name under the cursor. Returns empty string when a
+" test function is not found.
+function! s:SearchTestFunctionNameUnderCursor() abort
+    let cursor_line = line('.')
+
+    " Find #[test] attribute
+    if search('\m\C#\[test\]', 'bcW') is 0
+        return ''
+    endif
+
+    " Move to an opening brace of the test function
+    let test_func_line = search('\m\C^\s*fn\s\+\h\w*\s*(.\+{$', 'eW')
+    if test_func_line is 0
+        return ''
+    endif
+
+    " Search the end of test function (closing brace) to ensure that the
+    " cursor position is within function definition
+    normal! %
+    if line('.') < cursor_line
+        return ''
+    endif
+
+    return matchstr(getline(test_func_line), '\m\C^\s*fn\s\+\zs\h\w*')
+endfunction
+
+function! rust#Test(all, options) abort
+    let manifest = findfile('Cargo.toml', expand('%:p:h') . ';')
+    if manifest ==# ''
+        return rust#Run(1, '--test ' . a:options)
+    endif
+
+    if has('terminal')
+        let cmd = 'terminal '
+    elseif has('nvim')
+        let cmd = 'noautocmd new | terminal '
+    else
+        let cmd = '!'
+        let manifest = shellescape(manifest)
+    endif
+
+    if a:all
+        if a:options ==# ''
+            execute cmd . 'cargo test --manifest-path' manifest
+        else
+            execute cmd . 'cargo test --manifest-path' manifest a:options
+        endif
+        return
+    endif
+
+    let saved = getpos('.')
+    try
+        let func_name = s:SearchTestFunctionNameUnderCursor()
+        if func_name ==# ''
+            echohl ErrorMsg
+            echomsg 'No test function was found under the cursor. Please add ! to command if you want to run all tests'
+            echohl None
+            return
+        endif
+        if a:options ==# ''
+            execute cmd . 'cargo test --manifest-path' manifest func_name
+        else
+            execute cmd . 'cargo test --manifest-path' manifest func_name a:options
+        endif
+        return
+    finally
+        call setpos('.', saved)
+    endtry
 endfunction
 
 " }}}1
