@@ -3,7 +3,8 @@
 ## Description
 
 This is a Vim plugin that provides [Rust][r] file detection, syntax highlighting, formatting,
-[Syntastic][syn] integration, and more.
+[Syntastic][syn] integration, and more. It requires Vim 8 or higher for full functionality.
+Some things may not work on earlier versions. 
 
 ## Installation
 
@@ -40,8 +41,9 @@ for more details.
 
 ### Source browsing with [Tagbar][tgbr]
 
-`rust.vim` has builtin `ctags/` definitions for [Tagbar][tgbr] which
-are loaded if Tagbar is installed.
+The installation of Tagbar along with [Universal Ctags][uctags] is recommended
+for a good Tagbar experience. For other kinds of setups, `rust.vim` tries to
+configure Tagbar to some degree.
 
 ### Formatting with [rustfmt][rfmt]
 
@@ -71,6 +73,11 @@ If you set g:rust_clip_command RustPlay will copy the url to the clipboard.
 
         let g:rust_clip_command = 'xclip -selection clipboard'
 
+### Running a test under cursor
+
+In cargo project, the `:RustTest` command will run a test under the cursor.
+This is useful when your project is bigger and running all tests take longer time.
+
 ## Help
 
 Further help can be found in the documentation with `:Helptags` then `:help rust`.
@@ -96,6 +103,7 @@ LICENSE-MIT for details.
 [rfmt]: https://github.com/rust-lang-nursery/rustfmt
 [syn]: https://github.com/scrooloose/syntastic
 [tgbr]: https://github.com/majutsushi/tagbar
+[uctags]: https://ctags.io
 [wav]: https://github.com/mattn/webapi-vim
 [pp]: https://play.rust-lang.org/
 [vim8pack]: http://vimhelp.appspot.com/repeat.txt.html#packages
