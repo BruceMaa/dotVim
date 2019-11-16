@@ -77,8 +77,8 @@ function! g:NERDTreeGitStatusRefresh()
     let b:NERDTreeCachedGitDirtyDir   = {}
     let b:NOT_A_GIT_REPOSITORY        = 1
 
-    let l:root = fnamemodify(b:NERDTree.root.path.str(), ":p:S")
-    let l:gitcmd = 'git -c color.status=false status -s'
+    let l:root = fnamemodify(b:NERDTree.root.path.str(), ':p:gs?\\?/?:S')
+    let l:gitcmd = 'git -c color.status=false -C ' . l:root . ' status -s'
     if g:NERDTreeShowIgnoredStatus
         let l:gitcmd = l:gitcmd . ' --ignored'
     endif
@@ -88,7 +88,7 @@ function! g:NERDTreeGitStatusRefresh()
             let l:gitcmd = l:gitcmd . '=' . g:NERDTreeGitStatusIgnoreSubmodules
         endif
     endif
-    let l:statusesStr = system(l:gitcmd . ' ' . l:root)
+    let l:statusesStr = system(l:gitcmd)
     let l:statusesSplit = split(l:statusesStr, '\n')
     if l:statusesSplit != [] && l:statusesSplit[0] =~# 'fatal:.*'
         let l:statusesSplit = []
