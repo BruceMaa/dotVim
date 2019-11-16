@@ -60,10 +60,10 @@ vim 8 package
 
    > git remote add vim-colors-solarized git@github.com:altercation/vim-colors-solarized.git
    > 
-   > git subtree add --prefix=pack/plugins/opt/vim-colors-solarized vim-colors-solarized master --squash
+   > git subtree add --prefix=pack/plugins/start/vim-colors-solarized vim-colors-solarized master --squash
 
 10. vim-fugitive
 
    > git remote add vim-fugitive git@github.com:tpope/vim-fugitive.git
    > 
-   > git subtree add --prefix=pack/plugins/opt/vim-fugitive vim-fugitive master --squash
+   > git subtree add --prefix=pack/plugins/start/vim-fugitive vim-fugitive master --squash
