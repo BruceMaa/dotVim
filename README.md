@@ -4,7 +4,9 @@ vim 8 package
 
 ## install
 
-> git clone git@github.com:BruceMaa/dotVim.git ~/.vim
+```shell
+git clone git@github.com:BruceMaa/dotVim.git ~/.vim
+```
 
 ## vim-scripts
 
