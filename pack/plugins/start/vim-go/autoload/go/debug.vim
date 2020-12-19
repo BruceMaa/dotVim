@@ -13,6 +13,7 @@ if !exists('s:state')
         \ 'functionArgs': {},
         \ 'message': [],
         \ 'resultHandlers': {},
+        \ 'kill_on_detach': v:true,
       \ }
 
   if go#util#HasDebug('debugger-state')
@@ -22,6 +23,10 @@ endif
 
 if !exists('s:start_args')
   let s:start_args = []
+endif
+
+if !exists('s:mapargs')
+  let s:mapargs = {}
 endif
 
 function! s:goroutineID() abort
@@ -117,6 +122,8 @@ function! s:call_jsonrpc(handle_result, method, ...) abort
             \ 'request':  l:req_json,
       \ })
     endif
+
+    redraw
   catch
     throw substitute(v:exception, '^Vim', '', '')
   endtry
@@ -191,6 +198,9 @@ function! s:show_stacktrace(check_errors, res) abort
     silent %delete _
     for i in range(len(a:res.result.Locations))
       let loc = a:res.result.Locations[i]
+      if loc.file is# '?' || !has_key(loc, 'function')
+        continue
+      endif
       call setline(i+1, printf('%s - %s:%d', loc.function.name, fnamemodify(loc.file, ':p'), loc.line))
     endfor
   finally
@@ -237,6 +247,7 @@ function! s:show_variables() abort
 endfunction
 
 function! s:clearState() abort
+  let s:state['running'] = 0
   let s:state['currentThread'] = {}
   let s:state['localVars'] = {}
   let s:state['functionArgs'] = {}
@@ -246,7 +257,7 @@ function! s:clearState() abort
 endfunction
 
 function! s:stop() abort
-  call s:call_jsonrpc(function('s:noop'), 'RPCServer.Detach', {'kill': v:true})
+  call s:call_jsonrpc(function('s:noop'), 'RPCServer.Detach', {'kill': s:state['kill_on_detach']})
 
   if has_key(s:state, 'job')
     call go#job#Wait(s:state['job'])
@@ -264,7 +275,6 @@ function! s:stop() abort
   if has_key(s:state, 'ch')
     call remove(s:state, 'ch')
   endif
-
   call s:clearState()
 endfunction
 
@@ -273,13 +283,18 @@ function! go#debug#Stop() abort
   for k in map(split(execute('command GoDebug'), "\n")[1:], 'matchstr(v:val, "^\\s*\\zs\\S\\+")')
     exe 'delcommand' k
   endfor
-  command! -nargs=* -complete=customlist,go#package#Complete GoDebugStart call go#debug#Start(0, <f-args>)
-  command! -nargs=* -complete=customlist,go#package#Complete GoDebugTest  call go#debug#Start(1, <f-args>)
+  command! -nargs=* -complete=customlist,go#package#Complete GoDebugStart call go#debug#Start('debug', <f-args>)
+  command! -nargs=* -complete=customlist,go#package#Complete GoDebugTest  call go#debug#Start('test', <f-args>)
+  command! -nargs=* GoDebugTestFunc  call go#debug#TestFunc(<f-args>)
+  command! -nargs=1 GoDebugAttach call go#debug#Start('attach', <f-args>)
   command! -nargs=? GoDebugBreakpoint call go#debug#Breakpoint(<f-args>)
 
-  " Remove all mappings.
-  for k in map(split(execute('map <Plug>(go-debug-'), "\n")[1:], 'matchstr(v:val, "^n\\s\\+\\zs\\S\\+")')
-    exe 'unmap' k
+  " Restore mappings configured prior to debugging.
+  call s:restoreMappings()
+
+  " remove plug mappings
+  for k in map(split(execute('nmap <Plug>(go-debug-'), "\n"), 'matchstr(v:val, "^n\\s\\+\\zs\\S\\+")')
+    execute(printf('nunmap %s', k))
   endfor
 
   call s:stop()
@@ -425,16 +440,18 @@ endfunction
 
 function! s:start_cb() abort
   let l:winid = win_getid()
-  silent! only!
+  let l:debugwindows = go#config#DebugWindows()
+  if !empty(l:debugwindows)
+    silent! only!
+  endif
 
   let winnum = bufwinnr(bufnr('__GODEBUG_STACKTRACE__'))
   if winnum != -1
     return
   endif
 
-  let debugwindows = go#config#DebugWindows()
-  if has_key(debugwindows, "vars") && debugwindows['vars'] != ''
-    exe 'silent ' . debugwindows['vars']
+  if has_key(l:debugwindows, "vars") && l:debugwindows['vars'] != ''
+    exe 'silent ' . l:debugwindows['vars']
     silent file `='__GODEBUG_VARIABLES__'`
     setlocal buftype=nofile bufhidden=wipe nomodified nobuflisted noswapfile nowrap nonumber nocursorline
     setlocal filetype=godebugvariables
@@ -443,8 +460,8 @@ function! s:start_cb() abort
     nmap <buffer> q <Plug>(go-debug-stop)
   endif
 
-  if has_key(debugwindows, "stack") && debugwindows['stack'] != ''
-    exe 'silent ' . debugwindows['stack']
+  if has_key(l:debugwindows, "stack") && l:debugwindows['stack'] != ''
+    exe 'silent ' . l:debugwindows['stack']
     silent file `='__GODEBUG_STACKTRACE__'`
     setlocal buftype=nofile bufhidden=wipe nomodified nobuflisted noswapfile nowrap nonumber nocursorline
     setlocal filetype=godebugstacktrace
@@ -452,8 +469,8 @@ function! s:start_cb() abort
     nmap <buffer> q <Plug>(go-debug-stop)
   endif
 
-  if has_key(debugwindows, "goroutines") && debugwindows['goroutines'] != ''
-    exe 'silent ' . debugwindows['goroutines']
+  if has_key(l:debugwindows, "goroutines") && l:debugwindows['goroutines'] != ''
+    exe 'silent ' . l:debugwindows['goroutines']
     silent file `='__GODEBUG_GOROUTINES__'`
     setlocal buftype=nofile bufhidden=wipe nomodified nobuflisted noswapfile nowrap nonumber nocursorline
     setlocal filetype=godebugvariables
@@ -461,8 +478,8 @@ function! s:start_cb() abort
     nmap <buffer> <silent> <cr> :<c-u>call go#debug#Goroutine()<cr>
   endif
 
-  if has_key(debugwindows, "out") && debugwindows['out'] != ''
-    exe 'silent ' . debugwindows['out']
+  if has_key(l:debugwindows, "out") && l:debugwindows['out'] != ''
+    exe 'silent ' . l:debugwindows['out']
     silent file `='__GODEBUG_OUTPUT__'`
     setlocal buftype=nofile bufhidden=wipe nomodified nobuflisted noswapfile nowrap nonumber nocursorline
     setlocal filetype=godebugoutput
@@ -472,6 +489,7 @@ function! s:start_cb() abort
 
   silent! delcommand GoDebugStart
   silent! delcommand GoDebugTest
+  silent! delcommand GoDebugAttach
 
   command! -nargs=0 GoDebugContinue   call go#debug#Stack('continue')
   command! -nargs=0 GoDebugStop       call go#debug#Stop()
@@ -481,11 +499,10 @@ function! s:start_cb() abort
   nnoremap <silent> <Plug>(go-debug-stop)       :<C-u>call go#debug#Stop()<CR>
 
   augroup vim-go-debug
-    autocmd! * <buffer>
-    autocmd FileType go nmap <buffer> <F5>   <Plug>(go-debug-continue)
-    autocmd FileType go nmap <buffer> <F9>   <Plug>(go-debug-breakpoint)
+    autocmd! *
+    call s:configureMappings('(go-debug-breakpoint)', '(go-debug-continue)')
   augroup END
-  doautocmd vim-go-debug FileType go
+  doautocmd vim-go-debug BufWinEnter *.go
 endfunction
 
 function! s:continue()
@@ -495,11 +512,13 @@ function! s:continue()
   command! -nargs=0 GoDebugRestart    call go#debug#Restart()
   command! -nargs=* GoDebugSet        call go#debug#Set(<f-args>)
   command! -nargs=1 GoDebugPrint      call go#debug#Print(<q-args>)
+  command! -nargs=0 GoDebugHalt       call go#debug#Stack('halt')
 
   nnoremap <silent> <Plug>(go-debug-next)       :<C-u>call go#debug#Stack('next')<CR>
   nnoremap <silent> <Plug>(go-debug-step)       :<C-u>call go#debug#Stack('step')<CR>
   nnoremap <silent> <Plug>(go-debug-stepout)    :<C-u>call go#debug#Stack('stepOut')<CR>
   nnoremap <silent> <Plug>(go-debug-print)      :<C-u>call go#debug#Print(expand('<cword>'))<CR>
+  nnoremap <silent> <Plug>(go-debug-halt)       :<C-u>call go#debug#Stack('halt')<CR>
 
   if has('balloon_eval')
     let s:balloonexpr=&balloonexpr
@@ -509,15 +528,15 @@ function! s:continue()
     set ballooneval
   endif
 
+  " Some debug mappings were already added. Restore any mappings the user had
+  " before the complete mappings are configured so that the mappings are
+  " returned to the user's original state after the debugger is stopped.
+  call s:restoreMappings()
   augroup vim-go-debug
-    autocmd! * <buffer>
-    autocmd FileType go nmap <buffer> <F5>   <Plug>(go-debug-continue)
-    autocmd FileType go nmap <buffer> <F6>   <Plug>(go-debug-print)
-    autocmd FileType go nmap <buffer> <F9>   <Plug>(go-debug-breakpoint)
-    autocmd FileType go nmap <buffer> <F10>  <Plug>(go-debug-next)
-    autocmd FileType go nmap <buffer> <F11>  <Plug>(go-debug-step)
+    autocmd! *
+    call s:configureMappings('(go-debug-breakpoint)', '(go-debug-continue)', '(go-debug-halt)', '(go-debug-next)', '(go-debug-print)', '(go-debug-step)')
   augroup END
-  doautocmd vim-go-debug FileType go
+  doautocmd vim-go-debug BufWinEnter *.go
 endfunction
 
 function! s:err_cb(ch, msg) abort
@@ -651,10 +670,10 @@ function! s:message(buf, data) abort
   return printf('%s%s', a:buf, a:data)
 endfunction
 
-" s:error_check will be curried and injected into rpc result handlers so that
+" s:check_errors will be curried and injected into rpc result handlers so that
 " those result handlers can consistently check for errors in the response by
 " catching exceptions and handling the error appropriately.
-function! s:error_check(resp_json) abort
+function! s:check_errors(resp_json) abort
   if type(a:resp_json) == v:t_dict && has_key(a:resp_json, 'error') && !empty(a:resp_json.error)
     throw a:resp_json.error
   endif
@@ -664,10 +683,10 @@ function! s:handleRPCResult(resp) abort
   try
     let l:id = a:resp.id
     " call the result handler with its first argument set to a curried
-    " s:error_check value so that the the handle can call s:error_check
+    " s:check_errors value so that the result handler can call s:check_errors
     " without passing any arguments to check whether the response is an error
     " response.
-    call call(s:state.resultHandlers[l:id], [function('s:error_check', [a:resp]), a:resp])
+    call call(s:state.resultHandlers[l:id], [function('s:check_errors', [a:resp]), a:resp])
   catch
     throw v:exception
   finally
@@ -677,10 +696,18 @@ function! s:handleRPCResult(resp) abort
   endtry
 endfunction
 
+function! go#debug#TestFunc(...) abort
+  let l:test = go#util#TestName()
+  if l:test is ''
+    call go#util#Warn("vim-go: [debug] no test found immediate to cursor")
+    return
+  endif
+  call call('go#debug#Start', extend(['test', '.', '-test.run', printf('%s$', l:test)], a:000))
+endfunction
 
 " Start the debug mode. The first argument is the package name to compile and
 " debug, anything else will be passed to the running program.
-function! go#debug#Start(is_test, ...) abort
+function! go#debug#Start(mode, ...) abort
   call go#cmd#autowrite()
 
   if !go#util#has_job()
@@ -693,7 +720,7 @@ function! go#debug#Start(is_test, ...) abort
     return s:state['job']
   endif
 
-  let s:start_args = [a:is_test] + a:000
+  let s:start_args = [a:mode] + a:000
 
   if go#util#HasDebug('debugger-state')
     call go#config#SetDebugDiag(s:state)
@@ -705,37 +732,21 @@ function! go#debug#Start(is_test, ...) abort
   endif
 
   try
-    let l:cmd = [
-          \ dlv,
-          \ (a:is_test ? 'test' : 'debug'),
-     \]
 
-    " append the package when it's given.
-    if len(a:000) > 0
-      let l:pkgname = a:1
-      if l:pkgname[0] == '.'
-        let l:pkgabspath = fnamemodify(l:pkgname, ':p')
+    let l:cmd = [dlv, a:mode]
 
-        let l:cd = exists('*haslocaldir') && haslocaldir() ? 'lcd' : 'cd'
-        let l:dir = getcwd()
-        execute l:cd fnameescape(expand('%:p:h'))
-
-        try
-          let l:pkgname = go#package#FromPath(l:pkgabspath)
-          if type(l:pkgname) == type(0)
-            call go#util#EchoError('could not determine package name')
-            return
-          endif
-        finally
-          execute l:cd fnameescape(l:dir)
-        endtry
-      endif
-
-      let l:cmd += [l:pkgname]
+    let s:state['kill_on_detach'] = v:true
+    if a:mode is 'debug' || a:mode is 'test'
+      let l:cmd = extend(l:cmd, s:package(a:000))
+      let l:cmd = extend(l:cmd, ['--output', tempname()])
+    elseif a:mode is 'attach'
+      let l:cmd = add(l:cmd, a:1)
+      let s:state['kill_on_detach'] = v:false
+    else
+      call go#util#EchoError('Unknown dlv command')
     endif
 
     let l:cmd += [
-          \ '--output', tempname(),
           \ '--headless',
           \ '--api-version', '2',
           \ '--listen', go#config#DebugAddress(),
@@ -773,7 +784,38 @@ function! go#debug#Start(is_test, ...) abort
   return s:state['job']
 endfunction
 
-" Translate a reflect kind constant to a human string.
+" s:package returns the import path of package name of a :GoDebug(Start|Test)
+" call as a list so that the package can be appended to a command list using
+" extend(). args is expected to be a (potentially empty) list. The first
+" element in args (if there are any) is expected to be a package path. An
+" empty list is returned when either args is an empty list or the import path
+" cannot be determined.
+function! s:package(args)
+  if len(a:args) == 0
+    return []
+  endif
+
+  " append the package when it's given.
+  let l:pkgname = a:args[0]
+  if l:pkgname[0] == '.'
+    let l:pkgabspath = fnamemodify(l:pkgname, ':p')
+
+    let l:dir = go#util#Chdir(expand('%:p:h'))
+    try
+      let l:pkgname = go#package#FromPath(l:pkgabspath)
+      if type(l:pkgname) == type(0)
+        call go#util#EchoError('could not determine package name')
+        return []
+      endif
+    finally
+      call go#util#Chdir(l:dir)
+    endtry
+  endif
+
+  return [l:pkgname]
+endfunction
+
+  " Translate a reflect kind constant to a human string.
 function! s:reflect_kind(k)
   " Kind constants from Go's reflect package.
   return [
@@ -1020,28 +1062,28 @@ function! s:update_variables() abort
 endfunction
 
 function! s:handle_list_local_vars(check_errors, res) abort
+  let s:state['localVars'] = {}
   try
     call a:check_errors()
-    let s:state['localVars'] = {}
     if type(a:res) is type({}) && has_key(a:res, 'result') && !empty(a:res.result)
       let s:state['localVars'] = a:res.result['Variables']
     endif
   catch
-    call go#util#EchoError(printf('could not list variables: %s', v:exception))
+    call go#util#EchoWarning(printf('could not list variables: %s', v:exception))
   endtry
 
   call s:show_variables()
 endfunction
 
 function! s:handle_list_function_args(check_errors, res) abort
+  let s:state['functionArgs'] = {}
   try
     call a:check_errors()
-    let s:state['functionArgs'] = {}
     if type(a:res) is type({}) && has_key(a:res, 'result') && !empty(a:res.result)
       let s:state['functionArgs'] = a:res.result['Args']
     endif
   catch
-    call go#util#EchoError(printf('could not list function arguments: %s', v:exception))
+    call go#util#EchoWarning(printf('could not list function arguments: %s', v:exception))
   endtry
 
   call s:show_variables()
@@ -1114,7 +1156,7 @@ function! go#debug#Stack(name) abort
   endif
 
   " Add a breakpoint to the main.Main if the user didn't define any.
-  " TODO(bc): actually set set the breakpoint in main.Main
+  " TODO(bc): actually set the breakpoint in main.Main
   if len(s:list_breakpoints()) is 0
     if go#debug#Breakpoint() isnot 0
       let s:state.running = 0
@@ -1137,6 +1179,7 @@ function! go#debug#Stack(name) abort
     endif
     let s:stack_name = l:name
     try
+      silent! sign unplace 9999
       call s:call_jsonrpc(function('s:handle_stack_response', [l:name]), 'RPCServer.Command', {'name': l:name})
     catch
       call go#util#EchoError(printf('rpc failure: %s', v:exception))
@@ -1190,6 +1233,7 @@ function! go#debug#Restart() abort
   call go#cmd#autowrite()
 
   try
+    call s:restoreMappings()
     call s:stop()
 
     let s:state = {
@@ -1200,6 +1244,7 @@ function! go#debug#Restart() abort
           \ 'functionArgs': {},
           \ 'message': [],
           \ 'resultHandlers': {},
+          \ 'kill_on_detach': s:state['kill_on_detach'],
         \ }
 
     call call('go#debug#Start', s:start_args)
@@ -1434,6 +1479,123 @@ endfunction
 
 function! s:warn_stale(filename) abort
   call go#util#EchoWarning(printf('file locations may be incorrect, because  %s has changed since debugging started', a:filename))
+endfunction
+
+
+function! s:configureMappings(...) abort
+  if a:0 == 0
+    return
+  endif
+
+  let l:debug_mappings = go#config#DebugMappings()
+
+  for l:arg in a:000
+    if !has_key(l:debug_mappings, l:arg)
+      continue
+    endif
+
+    let l:config = l:debug_mappings[l:arg]
+
+    " do not attempt to apply the mapping when the key is empty or missing.
+    if get(l:config, 'key', '') == ''
+      continue
+    endif
+
+    let l:lhs = l:config.key
+    try
+      call execute(printf('autocmd BufWinEnter *.go call s:save_maparg_for(expand(''%%''), ''%s'')', l:lhs))
+      call execute('autocmd BufWinLeave  *.go call s:restoreMappings()')
+
+      let l:mapping = 'autocmd BufWinEnter *.go nmap <buffer>'
+      if has_key(l:config, 'arguments')
+        let l:mapping = printf('%s %s', l:mapping, l:config.arguments)
+      endif
+      let l:mapping = printf('%s %s <Plug>%s', l:mapping, l:lhs, l:arg)
+      call execute(l:mapping)
+    catch
+      call go#util#EchoError(printf('could not configure mapping for %s: %s', l:lhs, v:exception))
+    endtry
+  endfor
+endfunction
+
+function! s:save_maparg_for(bufname, lhs) abort
+  " make sure bufname is the active buffer.
+  if fnamemodify(a:bufname, ':p') isnot expand('%:p')
+    call go#util#EchoWarning('buffer must be active to save its mappings')
+    return
+  endif
+
+  " only normal-mode buffer-local mappings are needed, because all
+  " vim-go-debug mappings are normal-mode buffer-local mappings. Therefore,
+  " we only need to retrieve normal mode mappings that need to be saved.
+  let l:maparg = maparg(a:lhs, 'n', 0, 1)
+  if empty(l:maparg)
+    return
+  endif
+
+  if l:maparg.buffer
+    let l:bufmapargs = get(s:mapargs, a:bufname, [])
+    let l:bufmapargs = add(l:bufmapargs, l:maparg)
+    let s:mapargs[a:bufname] = l:bufmapargs
+  endif
+endfunction
+
+function! s:restoreMappings() abort
+  " Remove all debugging mappings.
+  for l:mapping in values(go#config#DebugMappings())
+    let l:lhs = get(l:mapping, 'key', '')
+    if l:lhs == ''
+      continue
+    endif
+    let l:maparg = maparg(l:lhs, 'n', 0, 1)
+    if empty(l:maparg)
+      continue
+    endif
+    if l:maparg.buffer
+      call execute(printf('nunmap <buffer> %s', l:lhs))
+    endif
+  endfor
+
+  call s:restoremappingfor(bufname(''))
+endfunction
+
+function! s:restoremappingfor(bufname) abort
+  if !has_key(s:mapargs, a:bufname)
+    return
+  endif
+
+  for l:maparg in s:mapargs[a:bufname]
+    call s:restore_mapping(l:maparg)
+  endfor
+  call remove(s:mapargs, a:bufname)
+endfunction
+
+function! s:restore_mapping(maparg)
+  if empty(a:maparg)
+    return
+  endif
+  if !exists('*mapset')
+    " see :h :map-arguments
+    let l:silent_attr = get(a:maparg, 'silent',  0) ? '<silent>' : ''
+    let l:nowait_attr = get(a:maparg, 'no_wait', 0) ? '<nowait>' : ''
+    let l:buffer_attr = get(a:maparg, 'buffer',  0) ? '<buffer>' : ''
+    let l:expr_attr   = get(a:maparg, 'expr',    0) ? '<expr>'   : ''
+    let l:unique_attr = get(a:maparg, 'unique',  0) ? '<unique>' : ''
+    let l:script_attr = get(a:maparg, 'script',  0) ? '<script>' : ''
+
+    let l:command     = [a:maparg['mode'], (get(a:maparg, 'noremap', 0) ? 'nore' : ''), 'map']
+    let l:command     = join(filter(l:command, '!empty(v:val)'), '')
+    let l:rhs         = a:maparg['rhs']
+    let l:lhs         = a:maparg['lhs']
+
+    " NOTE: most likely <buffer> should be first
+    let l:mapping = join(filter([l:command, l:buffer_attr, l:silent_attr, l:nowait_attr, l:expr_attr, l:unique_attr, l:script_attr, l:lhs, l:rhs], '!empty(v:val)'))
+    call execute(l:mapping)
+    return
+  endif
+
+  call mapset('n', 0, a:maparg)
+  return
 endfunction
 
 " restore Vi compatibility settings
