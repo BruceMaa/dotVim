@@ -23,6 +23,7 @@ endfunction
 let s:script_path = tolower(resolve(expand('<sfile>:p:h')))
 
 let s:filetype_overrides = {
+      \ 'coc-explorer':  [ 'CoC Explorer', '' ],
       \ 'defx':  ['defx', '%{b:defx.paths[0]}'],
       \ 'fugitive': ['fugitive', '%{airline#util#wrap(airline#extensions#branch#get_head(),80)}'],
       \ 'gundo': [ 'Gundo', '' ],
@@ -336,6 +337,12 @@ function! airline#extensions#load()
     call add(s:loaded_ext, 'lsp')
   endif
 
+  if (get(g:, 'airline#extensions#nvimlsp#enabled', 1)
+        \ && exists(':LspInstallInfo'))
+    call airline#extensions#nvimlsp#init(s:ext)
+    call add(s:loaded_ext, 'nvimlsp')
+  endif
+
   if (get(g:, 'airline#extensions#coc#enabled', 1) && exists(':CocCommand'))
     call airline#extensions#coc#init(s:ext)
     call add(s:loaded_ext, 'coc')
@@ -401,6 +408,11 @@ function! airline#extensions#load()
     call add(s:loaded_ext, 'gutentags')
   endif
 
+  if get(g:, 'airline#extensions#gen_tags#enabled', 1) && (get(g:, 'loaded_gentags#gtags', 0) || get(g:, 'loaded_gentags#ctags', 0))
+    call airline#extensions#gen_tags#init(s:ext)
+    call add(s:loaded_ext, 'gen_tags')
+  endif
+
   if (get(g:, 'airline#extensions#grepper#enabled', 1) && get(g:, 'loaded_grepper', 0))
     call airline#extensions#grepper#init(s:ext)
     call add(s:loaded_ext, 'grepper')
@@ -442,6 +454,11 @@ function! airline#extensions#load()
   if get(g:, 'airline#extensions#searchcount#enabled', 1) && exists('*searchcount')
     call airline#extensions#searchcount#init(s:ext)
     call add(s:loaded_ext, 'searchcount')
+  endif
+
+  if get(g:, 'loaded_battery', 0) && get(g:, 'airline#extensions#battery#enabled', 0)
+    call airline#extensions#battery#init(s:ext)
+    call add(s:loaded_ext, 'battery')
   endif
 
   if !get(g:, 'airline#extensions#disable_rtp_load', 0)
