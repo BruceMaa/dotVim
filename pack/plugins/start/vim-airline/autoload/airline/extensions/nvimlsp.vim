@@ -1,11 +1,12 @@
-" Apache 2.0 license. Copyright (c) 2019-2020 Copyright Neovim contributors.
+" Apache 2.0 license. Copyright (c) 2019-2021 Copyright Neovim contributors.
 " Plugin: https://github.com/neovim/nvim-lsp
 " vim: et ts=2 sts=2 sw=2
 
 scriptencoding utf-8
 
 if !(get(g:, 'airline#extensions#nvimlsp#enabled', 1)
-      \ && exists(':LspInstallInfo'))
+      \ && has('nvim')
+      \ && luaeval('vim.lsp ~= nil'))
   finish
 endif
 
@@ -14,7 +15,7 @@ function! s:airline_nvimlsp_count(cnt, symbol) abort
 endfunction
 
 function! airline#extensions#nvimlsp#get(type) abort
-  if !exists(':LspInstallInfo')
+  if luaeval('vim.tbl_isempty(vim.lsp.buf_get_clients(0))')
     return ''
   endif
 
