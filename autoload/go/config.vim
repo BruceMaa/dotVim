@@ -211,6 +211,10 @@ function! go#config#DebugWindows() abort
 
 endfunction
 
+function! go#config#DebugPreserveLayout() abort
+  return get(g:, 'go_debug_preserve_layout', 0)
+endfunction
+
 function! go#config#DebugAddress() abort
   return get(g:, 'go_debug_address', '127.0.0.1:8181')
 endfunction
@@ -259,14 +263,15 @@ function! go#config#SetTemplateAutocreate(value) abort
   let g:go_template_autocreate = a:value
 endfunction
 
+let s:default_metalinter = 'staticcheck'
 function! go#config#MetalinterCommand() abort
-  return get(g:, 'go_metalinter_command', 'golangci-lint')
+  return get(g:, 'go_metalinter_command', s:default_metalinter)
 endfunction
 
 function! go#config#MetalinterAutosaveEnabled() abort
   let l:default = []
-  if get(g:, 'go_metalinter_command', 'golangci-lint') == 'golangci-lint'
-    let l:default = ['govet', 'golint']
+  if get(g:, 'go_metalinter_command', s:default_metalinter) == 'golangci-lint'
+    let l:default = ['govet', 'revive']
   endif
 
   return get(g:, 'go_metalinter_autosave_enabled', l:default)
@@ -274,15 +279,15 @@ endfunction
 
 function! go#config#MetalinterEnabled() abort
   let l:default = []
-  if get(g:, 'go_metalinter_command', 'golangci-lint') == 'golangci-lint'
-    let l:default = ['vet', 'golint', 'errcheck']
+  if get(g:, 'go_metalinter_command', s:default_metalinter) == 'golangci-lint'
+    let l:default = ['vet', 'revive', 'errcheck']
   endif
 
   return get(g:, 'go_metalinter_enabled', l:default)
 endfunction
 
 function! go#config#GolintBin() abort
-  return get(g:, "go_golint_bin", "golint")
+  return get(g:, "go_golint_bin", "revive")
 endfunction
 
 function! go#config#ErrcheckBin() abort
@@ -306,7 +311,7 @@ function! go#config#FmtAutosave() abort
 endfunction
 
 function! go#config#ImportsAutosave() abort
-  return get(g:, 'go_imports_autosave', 0)
+  return get(g:, 'go_imports_autosave', 1)
 endfunction
 
 function! go#config#SetFmtAutosave(value) abort
@@ -350,11 +355,11 @@ function! go#config#DeclsMode() abort
 endfunction
 
 function! go#config#FmtCommand() abort
-  return get(g:, "go_fmt_command", "gofmt")
+  return get(g:, "go_fmt_command", go#config#GoplsEnabled() ? 'gopls' : 'gofmt')
 endfunction
 
 function! go#config#ImportsMode() abort
-  return get(g:, "go_imports_mode", "goimports")
+  return get(g:, "go_imports_mode", go#config#GoplsEnabled() ? 'gopls' : 'goimports')
 endfunction
 
 function! go#config#FmtOptions() abort
@@ -379,7 +384,7 @@ function! go#config#RenameCommand() abort
 endfunction
 
 function! go#config#GorenameBin() abort
-  return get(g:, "go_gorename_bin", "gopls")
+  return get(g:, "go_gorename_bin", 'gopls')
 endfunction
 
 function! go#config#GorenamePrefill() abort
@@ -604,6 +609,10 @@ function! go#config#DebugMappings() abort
   let l:user = deepcopy(get(g:, 'go_debug_mappings', {}))
 
   return extend(l:user, l:default, 'keep')
+endfunction
+
+function! go#config#DocBalloon() abort
+  return get(g:, 'go_doc_balloon', 0)
 endfunction
 
 " Set the default value. A value of "1" is a shortcut for this, for
